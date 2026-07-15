@@ -1,5 +1,6 @@
-python-telegram-bot
+python-telegram-bot>=20.0
 caldav
 icalendar
 pytz
 python-telegram-bot-calendar
+APScheduler

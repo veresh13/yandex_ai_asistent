@@ -1,0 +1,4 @@
+calendar_state.json
+contacts.json
+__pycache__/
+*.pyc

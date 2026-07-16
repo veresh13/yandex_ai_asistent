@@ -610,7 +610,7 @@ def list_contacts(update: Update, context: CallbackContext):
     show_contacts(update.effective_chat.id, context)
 
 # ============================================================
-#  РАСПИСАНИЕ И НАПОМИНАНИЯ
+#  РАСПИСАНИЕ И НАПОМИНАНИЯ (с расширенным диапазоном)
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
@@ -672,16 +672,17 @@ def send_reminders(context: CallbackContext):
         for ev in events:
             start = ev['start']
             if start <= now:
+                log(f"Событие '{ev['summary']}' уже началось или прошло (начало {start.strftime('%H:%M')})")
                 continue
             delta = start - now
             minutes_left = delta.total_seconds() / 60
             log(f"Событие '{ev['summary']}' начнётся через {minutes_left:.1f} минут (в {start.strftime('%H:%M')})")
-            if 29 <= minutes_left <= 31:
+            if 0 < minutes_left <= 31:
                 uid = ev.get('uid', '')
                 reminder_key = f"{uid}_{start.isoformat()}"
                 if reminder_key not in context.bot_data['sent_reminders']:
                     attendees_display = format_attendees(ev['attendees'], contacts)
-                    msg = f"⏰ *Напоминание!*\n\nВстреча *{ev['summary']}* начнётся через 30 минут.\n"
+                    msg = f"⏰ *Напоминание!*\n\nВстреча *{ev['summary']}* начнётся через {int(minutes_left)} минут.\n"
                     msg += f"🕒 {start.strftime('%H:%M')} – {ev['end'].strftime('%H:%M')}"
                     if ev['description']:
                         msg += f"\n📝 {ev['description']}"
@@ -694,12 +695,16 @@ def send_reminders(context: CallbackContext):
                             context.bot_data['sent_reminders'].add(reminder_key)
                         except Exception as e:
                             logger.error(f"Не удалось отправить напоминание {chat_id}: {e}")
+                else:
+                    log(f"Напоминание для '{ev['summary']}' уже отправлено.")
+            else:
+                log(f"Разница {minutes_left:.1f} мин не попадает в диапазон 0-31, пропускаем.")
     except Exception as e:
         logger.error(f"Ошибка в send_reminders: {e}")
         log(f"ОШИБКА в напоминаниях: {e}")
 
 # ============================================================
-#  ФОНОВЫЙ ПОТОК (с обработкой ошибок)
+#  ФОНОВЫЙ ПОТОК (с обработкой ошибок и логами)
 # ============================================================
 
 _last_schedule_date = None
@@ -710,38 +715,34 @@ def background_worker(updater):
     context = CallbackContext(dispatcher=updater.dispatcher)
     if 'sent_reminders' not in context.bot_data:
         context.bot_data['sent_reminders'] = set()
-    
-    # При первом запуске сразу отправляем расписание, если сейчас >= 9:00 и ещё не отправляли сегодня
+
     now = datetime.datetime.now(TIMEZONE)
     if now.hour >= 9:
         send_daily_schedule(context)
         _last_schedule_date = now
         log("Расписание отправлено при старте (после 9:00).")
-    
+
     while _running:
         try:
             now = datetime.datetime.now(TIMEZONE)
-            log(f"Цикл фонового потока: {now.strftime('%H:%M:%S')}")  # Лог для отладки
-            
-            # Расписание: отправляем один раз в день после 9:00
+            log(f"Цикл фонового потока: {now.strftime('%H:%M:%S')}")
+
             if now.hour >= 9 and (not _last_schedule_date or _last_schedule_date.date() != now.date()):
                 send_daily_schedule(context)
                 _last_schedule_date = now
                 log("Расписание отправлено (по расписанию).")
-            
-            # Напоминания каждую минуту (секунды 0-2)
+
             if now.second < 3:
                 send_reminders(context)
-            
-            # Изменения каждые 5 минут (минуты кратные 5)
+
             if now.minute % 5 == 0 and now.second < 3:
                 check_calendar_changes(context)
-            
+
             time.sleep(10)
         except Exception as e:
             logger.error(f"Критическая ошибка в фоновом потоке: {e}")
             log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}")
-            time.sleep(10)  # Ждём и продолжаем цикл
+            time.sleep(10)
 
 # ============================================================
 #  ЗАПУСК
@@ -774,7 +775,6 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_(add|contacts|help)$"))
     dispatcher.add_handler(conv_handler)
 
-    # Запускаем фоновый поток
     thread = threading.Thread(target=background_worker, args=(updater,), daemon=True)
     thread.start()
     log("Фоновый поток для уведомлений запущен.")

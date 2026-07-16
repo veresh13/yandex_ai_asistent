@@ -614,84 +614,92 @@ def list_contacts(update: Update, context: CallbackContext):
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
-    users = context.bot_data.get('users', set())
-    if not users:
-        log("Нет пользователей для расписания.")
-        return
-    calendars = get_calendars()
-    if not calendars:
-        log("Не удалось получить календари для расписания.")
-        return
-    today = datetime.date.today()
-    events = get_events_for_day(calendars, today)
-    contacts = load_contacts()
-    if not events:
-        message = "📅 На сегодня встреч нет."
-    else:
-        lines = ["📅 *Расписание на сегодня:*"]
-        for ev in events:
-            start_str = ev['start'].strftime("%H:%M")
-            end_str = ev['end'].strftime("%H:%M")
-            attendees_display = format_attendees(ev['attendees'], contacts)
-            line = f"• *{ev['summary']}*  ({start_str}–{end_str})"
-            if ev['description']:
-                line += f"\n  📝 {ev['description']}"
-            if attendees_display:
-                line += f"\n  👥 Участники: {attendees_display}"
-            lines.append(line)
-        message = "\n\n".join(lines)
-    for chat_id in users:
-        try:
-            context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
-            log(f"Расписание отправлено {chat_id}")
-        except Exception as e:
-            logger.error(f"Не удалось отправить расписание {chat_id}: {e}")
+    try:
+        users = context.bot_data.get('users', set())
+        if not users:
+            log("Нет пользователей для расписания.")
+            return
+        calendars = get_calendars()
+        if not calendars:
+            log("Не удалось получить календари для расписания.")
+            return
+        today = datetime.date.today()
+        events = get_events_for_day(calendars, today)
+        contacts = load_contacts()
+        if not events:
+            message = "📅 На сегодня встреч нет."
+        else:
+            lines = ["📅 *Расписание на сегодня:*"]
+            for ev in events:
+                start_str = ev['start'].strftime("%H:%M")
+                end_str = ev['end'].strftime("%H:%M")
+                attendees_display = format_attendees(ev['attendees'], contacts)
+                line = f"• *{ev['summary']}*  ({start_str}–{end_str})"
+                if ev['description']:
+                    line += f"\n  📝 {ev['description']}"
+                if attendees_display:
+                    line += f"\n  👥 Участники: {attendees_display}"
+                lines.append(line)
+            message = "\n\n".join(lines)
+        for chat_id in users:
+            try:
+                context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+                log(f"Расписание отправлено {chat_id}")
+            except Exception as e:
+                logger.error(f"Не удалось отправить расписание {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка в send_daily_schedule: {e}")
+        log(f"ОШИБКА в расписании: {e}")
 
 def send_reminders(context: CallbackContext):
-    log("=== Запущена проверка напоминаний ===")
-    users = context.bot_data.get('users', set())
-    if not users:
-        log("Нет зарегистрированных пользователей. Напоминания не отправляются.")
-        return
-    if 'sent_reminders' not in context.bot_data:
-        context.bot_data['sent_reminders'] = set()
-    calendars = get_calendars()
-    if not calendars:
-        log("Не удалось получить календари для напоминаний.")
-        return
-    today = datetime.date.today()
-    events = get_events_for_day(calendars, today)
-    now = datetime.datetime.now(TIMEZONE)
-    contacts = load_contacts()
-    log(f"=== ПРОВЕРКА НАПОМИНАНИЙ: найдено {len(events)} событий, сейчас {now.strftime('%H:%M:%S')} ===")
-    for ev in events:
-        start = ev['start']
-        if start <= now:
-            continue
-        delta = start - now
-        minutes_left = delta.total_seconds() / 60
-        log(f"Событие '{ev['summary']}' начнётся через {minutes_left:.1f} минут (в {start.strftime('%H:%M')})")
-        if 29 <= minutes_left <= 31:
-            uid = ev.get('uid', '')
-            reminder_key = f"{uid}_{start.isoformat()}"
-            if reminder_key not in context.bot_data['sent_reminders']:
-                attendees_display = format_attendees(ev['attendees'], contacts)
-                msg = f"⏰ *Напоминание!*\n\nВстреча *{ev['summary']}* начнётся через 30 минут.\n"
-                msg += f"🕒 {start.strftime('%H:%M')} – {ev['end'].strftime('%H:%M')}"
-                if ev['description']:
-                    msg += f"\n📝 {ev['description']}"
-                if attendees_display:
-                    msg += f"\n👥 Участники: {attendees_display}"
-                for chat_id in users:
-                    try:
-                        context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
-                        log(f"✅ Напоминание отправлено {chat_id}")
-                        context.bot_data['sent_reminders'].add(reminder_key)
-                    except Exception as e:
-                        logger.error(f"Не удалось отправить напоминание {chat_id}: {e}")
+    try:
+        log("=== Запущена проверка напоминаний ===")
+        users = context.bot_data.get('users', set())
+        if not users:
+            log("Нет зарегистрированных пользователей. Напоминания не отправляются.")
+            return
+        if 'sent_reminders' not in context.bot_data:
+            context.bot_data['sent_reminders'] = set()
+        calendars = get_calendars()
+        if not calendars:
+            log("Не удалось получить календари для напоминаний.")
+            return
+        today = datetime.date.today()
+        events = get_events_for_day(calendars, today)
+        now = datetime.datetime.now(TIMEZONE)
+        contacts = load_contacts()
+        log(f"=== ПРОВЕРКА НАПОМИНАНИЙ: найдено {len(events)} событий, сейчас {now.strftime('%H:%M:%S')} ===")
+        for ev in events:
+            start = ev['start']
+            if start <= now:
+                continue
+            delta = start - now
+            minutes_left = delta.total_seconds() / 60
+            log(f"Событие '{ev['summary']}' начнётся через {minutes_left:.1f} минут (в {start.strftime('%H:%M')})")
+            if 29 <= minutes_left <= 31:
+                uid = ev.get('uid', '')
+                reminder_key = f"{uid}_{start.isoformat()}"
+                if reminder_key not in context.bot_data['sent_reminders']:
+                    attendees_display = format_attendees(ev['attendees'], contacts)
+                    msg = f"⏰ *Напоминание!*\n\nВстреча *{ev['summary']}* начнётся через 30 минут.\n"
+                    msg += f"🕒 {start.strftime('%H:%M')} – {ev['end'].strftime('%H:%M')}"
+                    if ev['description']:
+                        msg += f"\n📝 {ev['description']}"
+                    if attendees_display:
+                        msg += f"\n👥 Участники: {attendees_display}"
+                    for chat_id in users:
+                        try:
+                            context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
+                            log(f"✅ Напоминание отправлено {chat_id}")
+                            context.bot_data['sent_reminders'].add(reminder_key)
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить напоминание {chat_id}: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка в send_reminders: {e}")
+        log(f"ОШИБКА в напоминаниях: {e}")
 
 # ============================================================
-#  ФОНОВЫЙ ПОТОК
+#  ФОНОВЫЙ ПОТОК (с обработкой ошибок)
 # ============================================================
 
 _last_schedule_date = None
@@ -711,19 +719,29 @@ def background_worker(updater):
         log("Расписание отправлено при старте (после 9:00).")
     
     while _running:
-        now = datetime.datetime.now(TIMEZONE)
-        # Расписание: отправляем один раз в день после 9:00
-        if now.hour >= 9 and (not _last_schedule_date or _last_schedule_date.date() != now.date()):
-            send_daily_schedule(context)
-            _last_schedule_date = now
-            log("Расписание отправлено (по расписанию).")
-        # Напоминания каждую минуту (секунды 0-2)
-        if now.second < 3:
-            send_reminders(context)
-        # Изменения каждые 5 минут (минуты кратные 5)
-        if now.minute % 5 == 0 and now.second < 3:
-            check_calendar_changes(context)
-        time.sleep(10)
+        try:
+            now = datetime.datetime.now(TIMEZONE)
+            log(f"Цикл фонового потока: {now.strftime('%H:%M:%S')}")  # Лог для отладки
+            
+            # Расписание: отправляем один раз в день после 9:00
+            if now.hour >= 9 and (not _last_schedule_date or _last_schedule_date.date() != now.date()):
+                send_daily_schedule(context)
+                _last_schedule_date = now
+                log("Расписание отправлено (по расписанию).")
+            
+            # Напоминания каждую минуту (секунды 0-2)
+            if now.second < 3:
+                send_reminders(context)
+            
+            # Изменения каждые 5 минут (минуты кратные 5)
+            if now.minute % 5 == 0 and now.second < 3:
+                check_calendar_changes(context)
+            
+            time.sleep(10)
+        except Exception as e:
+            logger.error(f"Критическая ошибка в фоновом потоке: {e}")
+            log(f"КРИТИЧЕСКАЯ ОШИБКА: {e}")
+            time.sleep(10)  # Ждём и продолжаем цикл
 
 # ============================================================
 #  ЗАПУСК

@@ -6,6 +6,7 @@ import re
 import sys
 import json
 import hashlib
+import threading
 from caldav import DAVClient
 from icalendar import Calendar, Event
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -609,7 +610,7 @@ def list_contacts(update: Update, context: CallbackContext):
     show_contacts(update.effective_chat.id, context)
 
 # ============================================================
-#  РАСПИСАНИЕ И НАПОМИНАНИЯ
+#  РАСПИСАНИЕ И НАПОМИНАНИЯ (функции те же)
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
@@ -686,6 +687,34 @@ def send_reminders(context: CallbackContext):
                         logger.error(f"Не удалось отправить напоминание {chat_id}: {e}")
 
 # ============================================================
+#  ФОНОВЫЙ ПОТОК ДЛЯ ЗАДАЧ (вместо JobQueue)
+# ============================================================
+
+_last_schedule_date = None
+_running = True
+
+def background_worker(updater):
+    global _last_schedule_date, _running
+    context = CallbackContext(dispatcher=updater.dispatcher)
+    # Восстанавливаем sent_reminders из bot_data, если есть
+    if 'sent_reminders' not in context.bot_data:
+        context.bot_data['sent_reminders'] = set()
+    while _running:
+        now = datetime.datetime.now(TIMEZONE)
+        # Расписание в 9:00
+        if now.hour == 9 and now.minute == 0 and now.second < 5:
+            if not _last_schedule_date or _last_schedule_date.date() != now.date():
+                send_daily_schedule(context)
+                _last_schedule_date = now
+        # Напоминания каждую минуту (секунды 0-2)
+        if now.second < 3:
+            send_reminders(context)
+        # Изменения каждые 5 минут (минуты кратные 5)
+        if now.minute % 5 == 0 and now.second < 3:
+            check_calendar_changes(context)
+        time.sleep(10)  # проверяем каждые 10 секунд
+
+# ============================================================
 #  ЗАПУСК
 # ============================================================
 
@@ -716,22 +745,18 @@ def main():
     dispatcher.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_(add|contacts|help)$"))
     dispatcher.add_handler(conv_handler)
 
-    # JobQueue
-    jq = updater.job_queue
-    if jq:
-        moscow_tz = pytz.timezone('Europe/Moscow')
-        # ежедневное расписание в 9:00
-        jq.run_daily(send_daily_schedule, time=datetime.time(hour=9, minute=0, tzinfo=moscow_tz))
-        # напоминания каждую минуту
-        jq.run_repeating(send_reminders, interval=60, first=10)
-        # проверка изменений каждые 5 минут
-        jq.run_repeating(check_calendar_changes, interval=300, first=20)
-        log("Планировщик запущен.")
-    else:
-        log("JobQueue не доступен — уведомления работать не будут")
+    # Запускаем фоновый поток
+    thread = threading.Thread(target=background_worker, args=(updater,), daemon=True)
+    thread.start()
+    log("Фоновый поток для уведомлений запущен.")
 
     updater.start_polling()
     updater.idle()
+
+    # Остановка потока при завершении
+    global _running
+    _running = False
+    thread.join(timeout=2)
 
 if __name__ == '__main__':
     main()

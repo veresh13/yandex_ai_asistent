@@ -10,8 +10,8 @@ from caldav import DAVClient
 from icalendar import Calendar, Event
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes, ConversationHandler, MessageHandler, filters
+    Updater, CommandHandler, CallbackQueryHandler,
+    ConversationHandler, MessageHandler, Filters, CallbackContext
 )
 from telegram_bot_calendar import WMonthTelegramCalendar
 import pytz
@@ -22,7 +22,7 @@ import pytz
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CALDAV_USERNAME = os.environ.get("CALDAV_USERNAME")
 CALDAV_APP_PASSWORD = os.environ.get("CALDAV_APP_PASSWORD")
-CALDAV_URL = "https://caldav.yandex.ru/calendars/retail.4.32%40vkusvill.ru/events-31428694/"
+CALDAV_URL = os.environ.get("CALDAV_URL", "https://caldav.yandex.ru/")
 
 if not all([TELEGRAM_TOKEN, CALDAV_USERNAME, CALDAV_APP_PASSWORD]):
     raise ValueError("Не заданы переменные окружения: TELEGRAM_TOKEN, CALDAV_USERNAME, CALDAV_APP_PASSWORD")
@@ -53,8 +53,8 @@ def main_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-async def send_menu(chat_id, context):
-    await context.bot.send_message(
+def send_menu(chat_id, context: CallbackContext):
+    context.bot.send_message(
         chat_id=chat_id,
         text="🏠 *Главное меню*\nВыбери действие:",
         reply_markup=main_menu_keyboard(),
@@ -272,7 +272,7 @@ def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f, indent=2)
 
-async def check_calendar_changes(context: ContextTypes.DEFAULT_TYPE):
+def check_calendar_changes(context: CallbackContext):
     users = context.bot_data.get('users', set())
     if not users:
         return
@@ -302,7 +302,7 @@ async def check_calendar_changes(context: ContextTypes.DEFAULT_TYPE):
     if changes:
         contacts = load_contacts()
         for chat_id in users:
-            await send_change_notifications(chat_id, changes, context, contacts)
+            send_change_notifications(chat_id, changes, context, contacts)
     new_state = {}
     for uid, ev in current_events.items():
         new_state[uid] = {
@@ -315,7 +315,7 @@ async def check_calendar_changes(context: ContextTypes.DEFAULT_TYPE):
         }
     save_state({'events': new_state})
 
-async def send_change_notifications(chat_id, changes, context, contacts):
+def send_change_notifications(chat_id, changes, context: CallbackContext, contacts):
     messages = []
     for change in changes:
         if change[0] == 'new':
@@ -353,33 +353,41 @@ async def send_change_notifications(chat_id, changes, context, contacts):
             messages.append(msg)
     if messages:
         try:
-            await context.bot.send_message(chat_id=chat_id, text="\n\n".join(messages), parse_mode='Markdown')
+            context.bot.send_message(chat_id=chat_id, text="\n\n".join(messages), parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Не удалось отправить уведомления {chat_id}: {e}")
 
 # ============================================================
-#  ОБРАБОТЧИКИ МЕНЮ
+#  ОБРАБОТЧИКИ КОМАНД
 # ============================================================
 
-async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    if 'users' not in context.bot_data:
+        context.bot_data['users'] = set()
+    context.bot_data['users'].add(chat_id)
+    log(f"Пользователь {chat_id} зарегистрирован")
+    send_menu(chat_id, context)
+
+def menu_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     data = query.data
     chat_id = query.message.chat_id
 
     if data == "menu_add":
-        await query.edit_message_text(
+        query.edit_message_text(
             "➕ *Добавление контакта*\n\n"
             "Введи команду вручную:\n"
             "`/addcontact Имя email`\n\n"
             "Например: `/addcontact Иванов Иван ivan@mail.ru`",
             parse_mode='Markdown'
         )
-        await send_menu(chat_id, context)
+        send_menu(chat_id, context)
     elif data == "menu_contacts":
-        await show_contacts(chat_id, context)
+        show_contacts(chat_id, context)
     elif data == "menu_help":
-        await query.edit_message_text(
+        query.edit_message_text(
             "🤖 *Помощь*\n\n"
             "Я помогаю управлять календарём.\n"
             "Доступные действия:\n"
@@ -395,15 +403,15 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  ОБЩИЕ ФУНКЦИИ
 # ============================================================
 
-async def start_find(chat_id, context):
+def start_find(chat_id, context: CallbackContext):
     calendar, step = WMonthTelegramCalendar().build()
-    await context.bot.send_message(
+    context.bot.send_message(
         chat_id=chat_id,
         text="Выбери месяц и день:",
         reply_markup=calendar
     )
 
-async def show_contacts(chat_id, context):
+def show_contacts(chat_id, context: CallbackContext):
     contacts = load_contacts()
     if not contacts:
         text = "📭 Адресная книга пуста."
@@ -412,65 +420,65 @@ async def show_contacts(chat_id, context):
         for name, email in contacts.items():
             lines.append(f"• {name} → {email}")
         text = "\n".join(lines)
-    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
+    context.bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown', reply_markup=main_menu_keyboard())
 
 # ============================================================
 #  ОБРАБОТЧИКИ ДИАЛОГА
 # ============================================================
 
-async def find(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start_find(update.effective_chat.id, context)
+def find(update: Update, context: CallbackContext):
+    start_find(update.effective_chat.id, context)
     return SELECTING_DATE
 
-async def find_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def find_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
-    await start_find(query.message.chat_id, context)
+    query.answer()
+    start_find(query.message.chat_id, context)
     return SELECTING_DATE
 
-async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def calendar_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     result, key, step = WMonthTelegramCalendar().process(query.data)
     chat_id = query.message.chat_id
 
     if not result and key:
-        await query.edit_message_text("Выбери месяц и день:", reply_markup=key)
+        query.edit_message_text("Выбери месяц и день:", reply_markup=key)
         return SELECTING_DATE
     elif result:
         context.user_data['selected_date'] = result
-        await query.edit_message_text(f"Выбрана дата: {result.strftime('%d.%m.%Y')}\nИщу свободные слоты...")
+        query.edit_message_text(f"Выбрана дата: {result.strftime('%d.%m.%Y')}\nИщу свободные слоты...")
         calendars = get_calendars()
         if not calendars:
-            await query.edit_message_text("Не удалось подключиться к календарю. Проверьте настройки.")
+            query.edit_message_text("Не удалось подключиться к календарю. Проверьте настройки.")
             return ConversationHandler.END
         start_dt = datetime.datetime.combine(result, datetime.time(9, 0, 0))
         end_dt = datetime.datetime.combine(result, datetime.time(18, 0, 0))
         free_slots = find_free_slots(calendars, start_dt, end_dt, slot_duration=30)
         if not free_slots:
-            await query.edit_message_text("На этот день нет свободных слотов с 9 до 18.")
+            query.edit_message_text("На этот день нет свободных слотов с 9 до 18.")
             return ConversationHandler.END
         context.user_data['all_free_slots'] = free_slots
         context.user_data['calendars'] = calendars
         keyboard = [[InlineKeyboardButton(slot.strftime("%H:%M"), callback_data=f"time_{slot.isoformat()}")] for slot in free_slots]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Выбери время начала встречи (доступны только свободные слоты):", reply_markup=reply_markup)
+        query.edit_message_text("Выбери время начала встречи (доступны только свободные слоты):", reply_markup=reply_markup)
         return SELECTING_TIME
     else:
         calendar, _ = WMonthTelegramCalendar().build()
-        await query.edit_message_text("Выбери месяц и день:", reply_markup=calendar)
+        query.edit_message_text("Выбери месяц и день:", reply_markup=calendar)
         return SELECTING_DATE
 
-async def time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def time_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     data = query.data
     if data.startswith("time_"):
         time_iso = data.replace("time_", "")
         try:
             selected_time = datetime.datetime.fromisoformat(time_iso)
         except:
-            await query.edit_message_text("Ошибка формата времени.")
+            query.edit_message_text("Ошибка формата времени.")
             return ConversationHandler.END
         context.user_data['selected_start'] = selected_time
         keyboard = [
@@ -480,39 +488,39 @@ async def time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("60 мин", callback_data="dur_60")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Выбрано время {selected_time.strftime('%H:%M')}. Теперь выбери длительность:", reply_markup=reply_markup)
+        query.edit_message_text(f"Выбрано время {selected_time.strftime('%H:%M')}. Теперь выбери длительность:", reply_markup=reply_markup)
         return SELECTING_DURATION
 
-async def duration_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def duration_callback(update: Update, context: CallbackContext):
     query = update.callback_query
-    await query.answer()
+    query.answer()
     data = query.data
     if data.startswith("dur_"):
         duration_minutes = int(data.replace("dur_", ""))
         context.user_data['duration_minutes'] = duration_minutes
-        await query.edit_message_text("Введите название встречи (обязательно):")
+        query.edit_message_text("Введите название встречи (обязательно):")
         return SELECTING_TITLE
 
-async def title_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def title_input(update: Update, context: CallbackContext):
     title = update.message.text.strip()
     if not title:
-        await update.message.reply_text("Название не может быть пустым. Введите название:")
+        update.message.reply_text("Название не может быть пустым. Введите название:")
         return SELECTING_TITLE
     context.user_data['title'] = title
-    await update.message.reply_text(
+    update.message.reply_text(
         "Введите описание встречи (необязательно).\n"
         "Если описание не нужно, отправьте слово 'пропустить'."
     )
     return SELECTING_DESCRIPTION
 
-async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def description_input(update: Update, context: CallbackContext):
     text = update.message.text.strip()
     if text.lower() == 'пропустить' or text == '':
         description = ''
     else:
         description = text
     context.user_data['description'] = description
-    await update.message.reply_text(
+    update.message.reply_text(
         "Теперь укажи участников (имена или email).\n"
         "Можно использовать имена из адресной книги.\n"
         "Введи их через запятую.\n"
@@ -520,7 +528,7 @@ async def description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SELECTING_ATTENDEES
 
-async def attendees_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def attendees_input(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
     if text.lower() == 'пропустить' or text == '':
@@ -529,7 +537,7 @@ async def attendees_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contacts = load_contacts()
         attendees = resolve_attendee_list(text, contacts)
         if not attendees:
-            await update.message.reply_text(
+            update.message.reply_text(
                 "Не найдено корректных имён или email-адресов. Попробуй ещё раз или отправь 'пропустить'."
             )
             return SELECTING_ATTENDEES
@@ -541,13 +549,13 @@ async def attendees_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = context.user_data.get('description', '')
     calendars = context.user_data.get('calendars', [])
     if not start_time or not duration_minutes or not title:
-        await update.message.reply_text("Ошибка: не хватает данных. Начни заново /find.")
+        update.message.reply_text("Ошибка: не хватает данных. Начни заново /find.")
         return ConversationHandler.END
     end_time = start_time + datetime.timedelta(minutes=duration_minutes)
     if calendars:
         my_calendar = calendars[0]
     else:
-        await update.message.reply_text("Не удалось найти ваш календарь.")
+        update.message.reply_text("Не удалось найти ваш календарь.")
         return ConversationHandler.END
     success = create_event(
         my_calendar,
@@ -565,46 +573,46 @@ async def attendees_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\nОписание: {description}"
         if attendees_display:
             msg += f"\n👥 Участники: {attendees_display}"
-        await update.message.reply_text(msg)
+        update.message.reply_text(msg)
     else:
-        await update.message.reply_text("❌ Не удалось создать встречу. Проверьте логи.")
+        update.message.reply_text("❌ Не удалось создать встречу. Проверьте логи.")
 
-    await send_menu(chat_id, context)
+    send_menu(chat_id, context)
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def cancel(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
-    await update.message.reply_text("Действие отменено.")
-    await send_menu(chat_id, context)
+    update.message.reply_text("Действие отменено.")
+    send_menu(chat_id, context)
     return ConversationHandler.END
 
 # ============================================================
 #  КОМАНДЫ ДЛЯ КОНТАКТОВ
 # ============================================================
 
-async def add_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def add_contact(update: Update, context: CallbackContext):
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("Формат: /addcontact Имя email")
+        update.message.reply_text("Формат: /addcontact Имя email")
         return
     name = ' '.join(args[:-1])
     email = args[-1]
     if '@' not in email:
-        await update.message.reply_text("Укажите корректный email")
+        update.message.reply_text("Укажите корректный email")
         return
     contacts = load_contacts()
     contacts[name] = email
     save_contacts(contacts)
-    await update.message.reply_text(f"✅ Контакт '{name}' с email {email} добавлен.")
+    update.message.reply_text(f"✅ Контакт '{name}' с email {email} добавлен.")
 
-async def list_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_contacts(update.effective_chat.id, context)
+def list_contacts(update: Update, context: CallbackContext):
+    show_contacts(update.effective_chat.id, context)
 
 # ============================================================
 #  РАСПИСАНИЕ И НАПОМИНАНИЯ
 # ============================================================
 
-async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
+def send_daily_schedule(context: CallbackContext):
     users = context.bot_data.get('users', set())
     if not users:
         return
@@ -631,11 +639,11 @@ async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
         message = "\n\n".join(lines)
     for chat_id in users:
         try:
-            await context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+            context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
         except Exception as e:
             logger.error(f"Не удалось отправить расписание {chat_id}: {e}")
 
-async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
+def send_reminders(context: CallbackContext):
     log("=== Запущена проверка напоминаний ===")
     users = context.bot_data.get('users', set())
     if not users:
@@ -671,7 +679,7 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
                     msg += f"\n👥 Участники: {attendees_display}"
                 for chat_id in users:
                     try:
-                        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
+                        context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
                         log(f"✅ Напоминание отправлено {chat_id}")
                         context.bot_data['sent_reminders'].add(reminder_key)
                     except Exception as e:
@@ -682,7 +690,8 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
 # ============================================================
 
 def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -693,38 +702,36 @@ def main():
             SELECTING_DATE: [CallbackQueryHandler(calendar_callback)],
             SELECTING_TIME: [CallbackQueryHandler(time_callback)],
             SELECTING_DURATION: [CallbackQueryHandler(duration_callback)],
-            SELECTING_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, title_input)],
-            SELECTING_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description_input)],
-            SELECTING_ATTENDEES: [MessageHandler(filters.TEXT & ~filters.COMMAND, attendees_input)],
+            SELECTING_TITLE: [MessageHandler(Filters.text & ~Filters.command, title_input)],
+            SELECTING_DESCRIPTION: [MessageHandler(Filters.text & ~Filters.command, description_input)],
+            SELECTING_ATTENDEES: [MessageHandler(Filters.text & ~Filters.command, attendees_input)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
+        allow_reentry=True
     )
 
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('addcontact', add_contact))
-    application.add_handler(CommandHandler('contacts', list_contacts))
-    application.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_(add|contacts|help)$"))
-    application.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('start', start))
+    dispatcher.add_handler(CommandHandler('addcontact', add_contact))
+    dispatcher.add_handler(CommandHandler('contacts', list_contacts))
+    dispatcher.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_(add|contacts|help)$"))
+    dispatcher.add_handler(conv_handler)
 
-    job_queue = application.job_queue
-    if job_queue:
+    # JobQueue
+    jq = updater.job_queue
+    if jq:
         moscow_tz = pytz.timezone('Europe/Moscow')
-        job_queue.run_daily(send_daily_schedule, time=datetime.time(hour=9, minute=0, tzinfo=moscow_tz))
-        job_queue.run_repeating(send_reminders, interval=60, first=10)
-        job_queue.run_repeating(check_calendar_changes, interval=300, first=20)
+        # ежедневное расписание в 9:00
+        jq.run_daily(send_daily_schedule, time=datetime.time(hour=9, minute=0, tzinfo=moscow_tz))
+        # напоминания каждую минуту
+        jq.run_repeating(send_reminders, interval=60, first=10)
+        # проверка изменений каждые 5 минут
+        jq.run_repeating(check_calendar_changes, interval=300, first=20)
         log("Планировщик запущен.")
     else:
         log("JobQueue не доступен — уведомления работать не будут")
 
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if 'users' not in context.bot_data:
-        context.bot_data['users'] = set()
-    context.bot_data['users'].add(chat_id)
-    log(f"Пользователь {chat_id} зарегистрирован")
-    await send_menu(chat_id, context)
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == '__main__':
     main()

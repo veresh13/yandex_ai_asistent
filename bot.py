@@ -610,7 +610,7 @@ def list_contacts(update: Update, context: CallbackContext):
     show_contacts(update.effective_chat.id, context)
 
 # ============================================================
-#  РАСПИСАНИЕ И НАПОМИНАНИЯ
+#  РАСПИСАНИЕ И НАПОМИНАНИЯ (с расширенным диапазоном и логами)
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
@@ -704,14 +704,15 @@ def send_reminders(context: CallbackContext):
         log(f"ОШИБКА в напоминаниях: {e}")
 
 # ============================================================
-#  ФОНОВЫЙ ПОТОК
+#  ФОНОВЫЙ ПОТОК (проверка каждые 10 секунд, без привязки к секундам)
 # ============================================================
 
 _last_schedule_date = None
+_last_reminder_check = None  # для отслеживания последней проверки, чтобы не дублировать
 _running = True
 
 def background_worker(updater):
-    global _last_schedule_date, _running
+    global _last_schedule_date, _last_reminder_check, _running
     context = CallbackContext(dispatcher=updater.dispatcher)
     if 'sent_reminders' not in context.bot_data:
         context.bot_data['sent_reminders'] = set()
@@ -727,14 +728,18 @@ def background_worker(updater):
             now = datetime.datetime.now(TIMEZONE)
             log(f"Цикл фонового потока: {now.strftime('%H:%M:%S')}")
 
+            # Расписание – раз в день
             if now.hour >= 9 and (not _last_schedule_date or _last_schedule_date.date() != now.date()):
                 send_daily_schedule(context)
                 _last_schedule_date = now
                 log("Расписание отправлено (по расписанию).")
 
-            if now.second < 3:
+            # Напоминания – каждые 10 секунд, но не чаще раза в 5 секунд (чтобы не дублировать)
+            if not _last_reminder_check or (now - _last_reminder_check).total_seconds() >= 5:
                 send_reminders(context)
+                _last_reminder_check = now
 
+            # Изменения – каждые 5 минут
             if now.minute % 5 == 0 and now.second < 3:
                 check_calendar_changes(context)
 

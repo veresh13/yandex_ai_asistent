@@ -610,15 +610,17 @@ def list_contacts(update: Update, context: CallbackContext):
     show_contacts(update.effective_chat.id, context)
 
 # ============================================================
-#  РАСПИСАНИЕ И НАПОМИНАНИЯ (функции те же)
+#  РАСПИСАНИЕ И НАПОМИНАНИЯ
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
     users = context.bot_data.get('users', set())
     if not users:
+        log("Нет пользователей для расписания.")
         return
     calendars = get_calendars()
     if not calendars:
+        log("Не удалось получить календари для расписания.")
         return
     today = datetime.date.today()
     events = get_events_for_day(calendars, today)
@@ -641,6 +643,7 @@ def send_daily_schedule(context: CallbackContext):
     for chat_id in users:
         try:
             context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown')
+            log(f"Расписание отправлено {chat_id}")
         except Exception as e:
             logger.error(f"Не удалось отправить расписание {chat_id}: {e}")
 
@@ -667,6 +670,7 @@ def send_reminders(context: CallbackContext):
             continue
         delta = start - now
         minutes_left = delta.total_seconds() / 60
+        log(f"Событие '{ev['summary']}' начнётся через {minutes_left:.1f} минут (в {start.strftime('%H:%M')})")
         if 29 <= minutes_left <= 31:
             uid = ev.get('uid', '')
             reminder_key = f"{uid}_{start.isoformat()}"
@@ -687,7 +691,7 @@ def send_reminders(context: CallbackContext):
                         logger.error(f"Не удалось отправить напоминание {chat_id}: {e}")
 
 # ============================================================
-#  ФОНОВЫЙ ПОТОК ДЛЯ ЗАДАЧ (вместо JobQueue)
+#  ФОНОВЫЙ ПОТОК
 # ============================================================
 
 _last_schedule_date = None
@@ -696,23 +700,30 @@ _running = True
 def background_worker(updater):
     global _last_schedule_date, _running
     context = CallbackContext(dispatcher=updater.dispatcher)
-    # Восстанавливаем sent_reminders из bot_data, если есть
     if 'sent_reminders' not in context.bot_data:
         context.bot_data['sent_reminders'] = set()
+    
+    # При первом запуске сразу отправляем расписание, если сейчас >= 9:00 и ещё не отправляли сегодня
+    now = datetime.datetime.now(TIMEZONE)
+    if now.hour >= 9:
+        send_daily_schedule(context)
+        _last_schedule_date = now
+        log("Расписание отправлено при старте (после 9:00).")
+    
     while _running:
         now = datetime.datetime.now(TIMEZONE)
-        # Расписание в 9:00
-        if now.hour == 9 and now.minute == 0 and now.second < 5:
-            if not _last_schedule_date or _last_schedule_date.date() != now.date():
-                send_daily_schedule(context)
-                _last_schedule_date = now
+        # Расписание: отправляем один раз в день после 9:00
+        if now.hour >= 9 and (not _last_schedule_date or _last_schedule_date.date() != now.date()):
+            send_daily_schedule(context)
+            _last_schedule_date = now
+            log("Расписание отправлено (по расписанию).")
         # Напоминания каждую минуту (секунды 0-2)
         if now.second < 3:
             send_reminders(context)
         # Изменения каждые 5 минут (минуты кратные 5)
         if now.minute % 5 == 0 and now.second < 3:
             check_calendar_changes(context)
-        time.sleep(10)  # проверяем каждые 10 секунд
+        time.sleep(10)
 
 # ============================================================
 #  ЗАПУСК
@@ -753,7 +764,6 @@ def main():
     updater.start_polling()
     updater.idle()
 
-    # Остановка потока при завершении
     global _running
     _running = False
     thread.join(timeout=2)

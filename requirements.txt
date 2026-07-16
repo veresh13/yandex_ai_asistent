@@ -3,4 +3,4 @@ caldav
 icalendar
 pytz
 python-telegram-bot-calendar
-APScheduler
+APScheduler>=3.10.0

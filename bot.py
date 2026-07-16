@@ -370,10 +370,6 @@ def start(update: Update, context: CallbackContext):
     log(f"Пользователь {chat_id} зарегистрирован")
     send_menu(chat_id, context)
 
-def test_command(update: Update, context: CallbackContext):
-    """Тестовая команда для проверки отправки сообщений"""
-    update.message.reply_text("✅ Тестовое сообщение! Бот работает и может отправлять сообщения.")
-
 def menu_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
@@ -614,7 +610,7 @@ def list_contacts(update: Update, context: CallbackContext):
     show_contacts(update.effective_chat.id, context)
 
 # ============================================================
-#  РАСПИСАНИЕ И НАПОМИНАНИЯ (с расширенным диапазоном и логами)
+#  РАСПИСАНИЕ И НАПОМИНАНИЯ
 # ============================================================
 
 def send_daily_schedule(context: CallbackContext):
@@ -681,8 +677,7 @@ def send_reminders(context: CallbackContext):
             delta = start - now
             minutes_left = delta.total_seconds() / 60
             log(f"Событие '{ev['summary']}' начнётся через {minutes_left:.1f} минут (в {start.strftime('%H:%M')})")
-            # Отправляем, если осталось от 0 до 60 минут (для отладки широкий диапазон)
-            if 0 < minutes_left <= 60:
+            if 0 < minutes_left <= 31:
                 uid = ev.get('uid', '')
                 reminder_key = f"{uid}_{start.isoformat()}"
                 if reminder_key not in context.bot_data['sent_reminders']:
@@ -703,13 +698,13 @@ def send_reminders(context: CallbackContext):
                 else:
                     log(f"Напоминание для '{ev['summary']}' уже отправлено.")
             else:
-                log(f"Разница {minutes_left:.1f} мин не попадает в диапазон 0-60, пропускаем.")
+                log(f"Разница {minutes_left:.1f} мин не попадает в диапазон 0-31, пропускаем.")
     except Exception as e:
         logger.error(f"Ошибка в send_reminders: {e}")
         log(f"ОШИБКА в напоминаниях: {e}")
 
 # ============================================================
-#  ФОНОВЫЙ ПОТОК (с обработкой ошибок и логами)
+#  ФОНОВЫЙ ПОТОК
 # ============================================================
 
 _last_schedule_date = None
@@ -775,7 +770,6 @@ def main():
     )
 
     dispatcher.add_handler(CommandHandler('start', start))
-    dispatcher.add_handler(CommandHandler('test', test_command))  # Новая команда для теста
     dispatcher.add_handler(CommandHandler('addcontact', add_contact))
     dispatcher.add_handler(CommandHandler('contacts', list_contacts))
     dispatcher.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_(add|contacts|help)$"))
